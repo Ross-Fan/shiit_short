@@ -1,0 +1,53 @@
+# Altcoin Short Monitoring System Configuration
+
+monitor:
+  interval_check: 10  # Check interval in seconds
+  symbols_type: "PERP"  # Only monitor perpetual contracts
+  min_volume_24h: 50000000  # Minimum 24h volume (USDT)
+
+strategy:
+  # Pump detection thresholds
+  flash_pump_threshold: 0.05  # 5% in 5 minutes
+  trend_pump_threshold: 0.15  # 15% in 1 hour
+  volume_multiplier: 3.0  # Current volume > avg * multiplier
+
+  # Short confirmation thresholds
+  short_rsi: 80  # RSI above this value
+  max_positions: 3  # Maximum concurrent short positions
+
+  # Confidence scoring
+  min_confidence: 0.6  # Minimum confidence to enter
+
+risk:
+  # BTC pump protection
+  btc_pump_threshold: 0.01  # 1% BTC pump
+  btc_pump_window: 900  # 15 minutes window
+
+execution:
+  leverage: 3  # Default leverage (2x-5x recommended)
+  stop_loss: 0.05  # 5% hard stop loss
+  take_profit: 0.10  # 10% take profit
+  position_size_percent: 0.05  # 5% of balance per position
+
+  # Order settings
+  order_type: "MARKET"  # MARKET or LIMIT
+  time_in_force: "GTC"  # GTC, IOC, FOK
+
+api:
+  binance:
+    api_key: ""  # Set via environment variable BINANCE_API_KEY
+    secret_key: ""  # Set via environment variable BINANCE_SECRET_KEY
+    testnet: true  # Use testnet by default
+
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "logs/monitor.log"
+  max_size: 10485760  # 10MB
+  backup_count: 5
+
+alerts:
+  enabled: true
+  # Add alert channels here (Telegram, Discord, etc.)
+  # telegram:
+  #   bot_token: ""
+  #   chat_id: ""
