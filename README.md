@@ -170,14 +170,35 @@ cd shiit_short
 
 # Create virtual environment
 python3 -m venv venv
-source venv/bin/activate
 
-# Install dependencies
+# Install dependencies (two ways):
+
+# Option A: Activate venv first (for interactive use)
+source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
+
+# Option B: Use venv's pip directly (for scripts)
+# ./venv/bin/pip install --upgrade pip
+# ./venv/bin/pip install -r requirements.txt
 ```
 
-#### 3. Configuration
+#### 3. Run Manually (with venv)
+
+```bash
+cd /opt/shiit_short
+
+# Activate virtual environment
+source venv/bin/activate
+
+# Run the monitor
+python main.py
+
+# When done, deactivate
+deactivate
+```
+
+#### 4. Configuration
 
 ```bash
 # Edit configuration
@@ -189,7 +210,7 @@ nano config/config.yaml
 # - pump thresholds: adjust as needed
 ```
 
-#### 4. Create Systemd Service (Recommended)
+#### 5. Create Systemd Service (Recommended)
 
 ```bash
 # Create service file
@@ -227,7 +248,7 @@ sudo systemctl start shiit-monitor
 sudo systemctl status shiit-monitor
 ```
 
-#### 5. View Logs
+#### 6. View Logs
 
 ```bash
 # View systemd service logs (real-time)
@@ -241,7 +262,7 @@ tail -f /opt/shiit_short/logs/signals/pumps_$(date +%Y%m%d).jsonl
 tail -f /opt/shiit_short/logs/signals/signals_$(date +%Y%m%d).jsonl
 ```
 
-#### 6. Service Management
+#### 7. Service Management
 
 ```bash
 # Stop service

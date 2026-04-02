@@ -61,13 +61,15 @@ cd "$INSTALL_DIR"
 
 # Step 3: Setup Python virtual environment
 echo -e "${GREEN}[3/6] Setting up Python environment...${NC}"
+cd "$INSTALL_DIR"
+
 if [ ! -d "venv" ]; then
-    python3 -m venv venv
+    sudo -u $USER python3 -m venv venv
 fi
 
-source venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
+# Install dependencies using the venv's pip directly (no need to activate)
+sudo -u $USER $INSTALL_DIR/venv/bin/pip install --upgrade pip
+sudo -u $USER $INSTALL_DIR/venv/bin/pip install -r requirements.txt
 
 # Step 4: Create log directories
 echo -e "${GREEN}[4/6] Creating directories...${NC}"
