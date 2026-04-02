@@ -1,7 +1,7 @@
 """Technical indicators module."""
 
 import numpy as np
-from typing import List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional
 
 
 class RSI:

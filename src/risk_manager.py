@@ -1,11 +1,14 @@
 """Risk management module."""
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, TYPE_CHECKING
 from datetime import datetime, timedelta
 
 from .data_fetcher import BinanceDataFetcher
 from .indicators import Fibonacci
+
+if TYPE_CHECKING:
+    from .config_loader import Config
 
 
 @dataclass
@@ -33,12 +36,12 @@ class RiskCheck:
 class RiskManager:
     """Risk management for short positions."""
 
-    def __init__(self, data_fetcher: BinanceDataFetcher, config: Dict):
+    def __init__(self, data_fetcher: BinanceDataFetcher, config: "Config"):
         """Initialize risk manager.
 
         Args:
             data_fetcher: BinanceDataFetcher instance
-            config: Configuration dictionary
+            config: Config instance
         """
         self.data_fetcher = data_fetcher
         self.config = config

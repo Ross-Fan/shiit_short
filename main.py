@@ -11,6 +11,7 @@ from src.config_loader import Config
 from src.data_fetcher import BinanceDataFetcher
 from src.strategy_engine import StrategyEngine, PumpSignal, ShortSignal
 from src.risk_manager import RiskManager
+from src.signal_logger import SignalLogger
 
 
 class ShortMonitor:
@@ -32,8 +33,11 @@ class ShortMonitor:
             testnet=self.config.get("api", "binance", "testnet", default=True),
         )
 
-        self.strategy_engine = StrategyEngine(self.data_fetcher, self.config.raw)
-        self.risk_manager = RiskManager(self.data_fetcher, self.config.raw)
+        self.strategy_engine = StrategyEngine(self.data_fetcher, self.config)
+        self.risk_manager = RiskManager(self.data_fetcher, self.config)
+        self.signal_logger = SignalLogger(
+            log_dir=self.config.get("logging", "signal_log_dir", default="logs/signals")
+        )
 
         # Control flags
         self._running = False
@@ -169,6 +173,17 @@ class ShortMonitor:
 
         interval = self.config.get("monitor", "interval_check", default=10)
 
+        # Wait for initial data to populate
+        print("Waiting for market data...")
+        for _ in range(10):
+            time.sleep(1)
+            tickers = self.data_fetcher.get_all_tickers()
+            if len(tickers) > 100:
+                print(f"Received {len(tickers)} symbols, starting monitoring...")
+                break
+        else:
+            self.logger.warning("Timeout waiting for market data, proceeding anyway")
+
         try:
             while self._running and not self._shutdown_requested:
                 # Wait for data to populate
@@ -187,6 +202,9 @@ class ShortMonitor:
                     self._pump_count += len(pumps)
                     self._print_pump_rankings(pumps)
 
+                    # Log all detected pumps
+                    self.signal_logger.log_pumps_batch(pumps)
+
                     # Evaluate short opportunities
                     signals = []
                     for pump in pumps[:5]:  # Check top 5
@@ -194,11 +212,20 @@ class ShortMonitor:
                         risk_check = self.risk_manager.can_open_position(pump.symbol)
                         if not risk_check.allowed:
                             self.logger.info(f"Skip {pump.symbol}: {risk_check.reason}")
+                            self.signal_logger.log_risk_rejection(
+                                pump.symbol, risk_check.reason, pump
+                            )
                             continue
 
                         signal = self.strategy_engine.evaluate_short_opportunity(pump)
                         if signal:
                             signals.append(signal)
+                            self.signal_logger.log_short_signal(signal)
+                        else:
+                            # Signal evaluated but confidence too low
+                            self.signal_logger.log_rejected_signal(
+                                pump.symbol, "confidence_below_threshold", pump
+                            )
 
                     if signals:
                         self._signal_count += len(signals)
@@ -226,6 +253,10 @@ class ShortMonitor:
         self._running = False
         self.data_fetcher.stop_ticker_stream()
 
+        # Log session summary
+        self.signal_logger.log_session_summary()
+        session_stats = self.signal_logger.get_session_stats()
+
         self.logger.info("Monitor stopped")
         print("\n" + "=" * 80)
         print("Monitor stopped")
@@ -233,6 +264,13 @@ class ShortMonitor:
 
         # Print final statistics
         self._print_statistics()
+
+        # Print signal logger stats
+        print(f"\n--- Signal Log Stats ---")
+        print(f"  Pumps logged: {session_stats['pumps_detected']}")
+        print(f"  Signals logged: {session_stats['signals_generated']}")
+        print(f"  Rejected signals: {session_stats['signals_rejected']}")
+        print(f"  Signal rate: {session_stats['signal_rate']:.2%}")
 
 
 def main():

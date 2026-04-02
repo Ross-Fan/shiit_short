@@ -57,9 +57,11 @@ class BinanceDataFetcher:
         self.testnet = testnet
 
         if testnet:
-            self.base_url = "https://testnet.binance.vision"
-            self.ws_url = "wss://testnet.binance.vision/ws"
+            # Binance Futures Testnet
+            self.base_url = "https://testnet.binancefuture.com"
+            self.ws_url = "wss://stream.binancefuture.com/ws"
         else:
+            # Binance Futures Mainnet
             self.base_url = "https://fapi.binance.com"
             self.ws_url = "wss://fstream.binance.com/ws"
 
@@ -145,19 +147,24 @@ class BinanceDataFetcher:
             TickerData object or None
         """
         try:
-            # Check if it's a perpetual contract
+            # Check if it's a perpetual contract (USDT settled)
             if not data["s"].endswith("USDT"):
                 return None
 
+            # miniTicker doesn't have 'P' field, calculate from open/close
+            close_price = float(data["c"])
+            open_price = float(data["o"])
+            price_change_pct = ((close_price - open_price) / open_price * 100) if open_price > 0 else 0
+
             return TickerData(
                 symbol=data["s"],
-                price=float(data["c"]),
-                price_change_percent_24h=float(data["P"]),
+                price=close_price,
+                price_change_percent_24h=price_change_pct,
                 volume=float(data["v"]),
                 quote_volume=float(data["q"]),
                 timestamp=float(data["E"]),
             )
-        except (KeyError, ValueError):
+        except (KeyError, ValueError, ZeroDivisionError):
             return None
 
     def get_ticker(self, symbol: str) -> Optional[TickerData]:

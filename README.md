@@ -119,13 +119,235 @@ shiit_short/
 │   ├── strategy_engine.py     # Pump detection & signal analysis
 │   ├── risk_manager.py        # Risk controls
 │   ├── executor.py            # Trade execution (Phase 4)
-│   └── indicators.py          # Technical indicators
+│   ├── indicators.py          # Technical indicators
+│   └── signal_logger.py       # Signal logging for analysis
 ├── config/
 │   └── config.yaml            # Configuration file
 ├── logs/
+│   ├── monitor.log            # Application logs
+│   └── signals/               # Signal logs (JSONL format)
+│       ├── pumps_YYYYMMDD.jsonl
+│       ├── signals_YYYYMMDD.jsonl
+│       └── rejected_YYYYMMDD.jsonl
 ├── main.py                    # Main entry point
 ├── requirements.txt           # Python dependencies
 └── README.md                  # This file
+```
+
+## Deployment on Ubuntu Server
+
+### Quick Deploy (One-liner)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/YOUR_REPO/shiit_short/main/deploy.sh | bash
+```
+
+Or follow the manual steps below:
+
+### Manual Deployment Steps
+
+#### 1. System Prerequisites
+
+```bash
+# Update system
+sudo apt update && sudo apt upgrade -y
+
+# Install Python 3.10+ and pip
+sudo apt install -y python3 python3-pip python3-venv git
+
+# Verify Python version (should be 3.10+)
+python3 --version
+```
+
+#### 2. Clone and Setup
+
+```bash
+# Clone repository
+cd /opt
+sudo git clone https://github.com/YOUR_REPO/shiit_short.git
+sudo chown -R $USER:$USER shiit_short
+cd shiit_short
+
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+#### 3. Configuration
+
+```bash
+# Edit configuration
+nano config/config.yaml
+
+# Key settings to verify:
+# - testnet: false (for real market data)
+# - min_volume_24h: adjust based on your preference
+# - pump thresholds: adjust as needed
+```
+
+#### 4. Create Systemd Service (Recommended)
+
+```bash
+# Create service file
+sudo tee /etc/systemd/system/shiit-monitor.service > /dev/null << 'EOF'
+[Unit]
+Description=Altcoin Short Monitoring System
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/shiit_short
+Environment=PATH=/opt/shiit_short/venv/bin:/usr/bin
+ExecStart=/opt/shiit_short/venv/bin/python main.py
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits
+MemoryLimit=512M
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Reload systemd and enable service
+sudo systemctl daemon-reload
+sudo systemctl enable shiit-monitor
+sudo systemctl start shiit-monitor
+
+# Check status
+sudo systemctl status shiit-monitor
+```
+
+#### 5. View Logs
+
+```bash
+# View systemd service logs (real-time)
+sudo journalctl -u shiit-monitor -f
+
+# View application logs
+tail -f /opt/shiit_short/logs/monitor.log
+
+# View signal logs
+tail -f /opt/shiit_short/logs/signals/pumps_$(date +%Y%m%d).jsonl
+tail -f /opt/shiit_short/logs/signals/signals_$(date +%Y%m%d).jsonl
+```
+
+#### 6. Service Management
+
+```bash
+# Stop service
+sudo systemctl stop shiit-monitor
+
+# Restart service
+sudo systemctl restart shiit-monitor
+
+# Disable auto-start
+sudo systemctl disable shiit-monitor
+
+# View recent logs
+sudo journalctl -u shiit-monitor -n 100
+
+# View logs since last boot
+sudo journalctl -u shiit-monitor -b
+```
+
+### Alternative: Run with Screen/Tmux
+
+If you prefer not to use systemd:
+
+```bash
+# Using screen
+screen -S shiit
+cd /opt/shiit_short
+source venv/bin/activate
+python main.py
+# Press Ctrl+A, D to detach
+
+# Reattach later
+screen -r shiit
+```
+
+```bash
+# Using tmux
+tmux new -s shiit
+cd /opt/shiit_short
+source venv/bin/activate
+python main.py
+# Press Ctrl+B, D to detach
+
+# Reattach later
+tmux attach -t shiit
+```
+
+### Log Analysis
+
+Signal logs are in JSONL format for easy analysis:
+
+```bash
+# Count pumps detected today
+wc -l /opt/shiit_short/logs/signals/pumps_$(date +%Y%m%d).jsonl
+
+# View all short signals
+cat /opt/shiit_short/logs/signals/signals_$(date +%Y%m%d).jsonl | jq .
+
+# Filter high-confidence signals (>70%)
+cat /opt/shiit_short/logs/signals/signals_*.jsonl | jq 'select(.confidence > 0.7)'
+
+# View rejection reasons
+cat /opt/shiit_short/logs/signals/rejected_*.jsonl | jq -r '.reason' | sort | uniq -c | sort -rn
+```
+
+### Firewall Configuration (Optional)
+
+The monitor only makes outbound connections, no inbound ports needed:
+
+```bash
+# If using UFW, ensure outbound is allowed (default)
+sudo ufw status
+
+# The service connects to:
+# - wss://fstream.binance.com (WebSocket)
+# - https://fapi.binance.com (REST API)
+```
+
+### Troubleshooting
+
+**WebSocket connection fails:**
+```bash
+# Check network connectivity
+curl -I https://fapi.binance.com/fapi/v1/ping
+
+# Check DNS resolution
+nslookup fstream.binance.com
+```
+
+**Service won't start:**
+```bash
+# Check for errors
+sudo journalctl -u shiit-monitor -n 50 --no-pager
+
+# Test manually
+cd /opt/shiit_short
+source venv/bin/activate
+python main.py
+```
+
+**High memory usage:**
+```bash
+# Check memory
+free -h
+
+# Restart service to clear memory
+sudo systemctl restart shiit-monitor
 ```
 
 ## Development Roadmap

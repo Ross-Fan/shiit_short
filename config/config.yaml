@@ -37,7 +37,7 @@ api:
   binance:
     api_key: ""  # Set via environment variable BINANCE_API_KEY
     secret_key: ""  # Set via environment variable BINANCE_SECRET_KEY
-    testnet: true  # Use testnet by default
+    testnet: false  # Use mainnet for real market data (Phase 1 only needs public data)
 
 logging:
   level: "INFO"  # DEBUG, INFO, WARNING, ERROR

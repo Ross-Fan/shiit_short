@@ -1,12 +1,15 @@
 """Strategy engine module for short signal detection."""
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, TYPE_CHECKING
 import pandas as pd
 from datetime import datetime, timedelta
 
 from .data_fetcher import BinanceDataFetcher, TickerData
 from .indicators import RSI, Fibonacci, CandlePattern, VolumeAnalyzer, FundingRateAnalyzer
+
+if TYPE_CHECKING:
+    from .config_loader import Config
 
 
 @dataclass
@@ -39,12 +42,12 @@ class ShortSignal:
 class StrategyEngine:
     """Engine for detecting short opportunities."""
 
-    def __init__(self, data_fetcher: BinanceDataFetcher, config: Dict):
+    def __init__(self, data_fetcher: BinanceDataFetcher, config: "Config"):
         """Initialize strategy engine.
 
         Args:
             data_fetcher: BinanceDataFetcher instance
-            config: Configuration dictionary
+            config: Config instance
         """
         self.data_fetcher = data_fetcher
         self.config = config

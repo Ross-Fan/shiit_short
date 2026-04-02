@@ -451,7 +451,8 @@ class BinanceExecutor:
         response = self._request("GET", "/fapi/v2/balance", {}, signed=True)
 
         if response:
-            return {asset: float(item["balance"]) for asset, item in response.items()}
+            # Response is a list of balance objects
+            return {item["asset"]: float(item["balance"]) for item in response}
 
         return None
 
