@@ -191,11 +191,30 @@ cd /opt/shiit_short
 # Activate virtual environment
 source venv/bin/activate
 
-# Run the monitor
+# Run the monitor (foreground - will stop when terminal closes)
 python main.py
 
 # When done, deactivate
 deactivate
+```
+
+#### 3.1 Run in Background (nohup)
+
+```bash
+cd /opt/shiit_short
+source venv/bin/activate
+
+# Run in background with nohup (keeps running after terminal closes)
+nohup python main.py > logs/nohup.log 2>&1 &
+
+# Check if running
+ps aux | grep "python main.py"
+
+# View output
+tail -f logs/nohup.log
+
+# Stop the process
+pkill -f "python main.py"
 ```
 
 #### 4. Configuration
