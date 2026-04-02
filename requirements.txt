@@ -1,4 +1,4 @@
-binance-connector-python>=3.0.0
+binance-connector>=3.0.0
 websocket-client>=1.0.0
 pandas>=2.0.0
 numpy>=1.24.0
