@@ -6,7 +6,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 from .data_fetcher import BinanceDataFetcher, TickerData
-from .indicators import RSI, Fibonacci, CandlePattern, VolumeAnalyzer, FundingRateAnalyzer
+from .indicators import RSI, Fibonacci, CandlePattern, VolumeAnalyzer, FundingRateAnalyzer, MomentumAnalyzer
 
 if TYPE_CHECKING:
     from .config_loader import Config
@@ -17,10 +17,30 @@ class PumpSignal:
     """Pump detection signal."""
 
     symbol: str
-    pump_type: str  # "flash" or "trend"
-    price_change_5m: float
-    price_change_1h: float
-    relative_volume: float
+    pump_type: str  # "moderate"(50-100%) / "extreme"(100-200%) / "ultra"(200%+)
+    gain_from_prev_high: float  # Gain from previous day's high (%)
+    price_change_5m: float  # 5-minute price change (%)
+    price_change_15m: float  # 15-minute price change (%)
+    price_change_1h: float  # 1-hour price change (%)
+    relative_volume: float  # Volume multiplier
+    prev_day_high: float  # Previous day's high price
+    current_price: float  # Current price
+    timestamp: datetime
+
+
+@dataclass
+class ExhaustionSignal:
+    """Momentum exhaustion signal."""
+
+    symbol: str
+    volume_divergence: bool  # Price-volume divergence detected
+    volume_divergence_strength: float  # Divergence strength (0-1)
+    rsi_divergence_1m: bool  # 1-minute RSI divergence
+    rsi_divergence_5m: bool  # 5-minute RSI divergence
+    rsi_divergence_15m: bool  # 15-minute RSI divergence
+    momentum_slowdown: bool  # Momentum slowdown detected
+    momentum_slowdown_degree: float  # Slowdown degree (0-1)
+    exhaustion_score: float  # Combined exhaustion score (0-1)
     timestamp: datetime
 
 
@@ -36,6 +56,9 @@ class ShortSignal:
     volume_multiplier: float
     pattern: Optional[str]  # PIN bar, M-Top, etc.
     confidence: float  # 0.0 to 1.0
+    pump_type: str  # From PumpSignal
+    gain_from_prev_high: float  # From PumpSignal
+    exhaustion: Optional[ExhaustionSignal]  # Exhaustion signal
     timestamp: datetime
 
 
@@ -52,12 +75,33 @@ class StrategyEngine:
         self.data_fetcher = data_fetcher
         self.config = config
 
-        # Load thresholds from config
-        self.flash_pump_threshold = config.get("strategy", "flash_pump_threshold", default=0.05)
-        self.trend_pump_threshold = config.get("strategy", "trend_pump_threshold", default=0.15)
+        # Load pump thresholds from config (relative to previous day's high)
+        self.pump_threshold_moderate = config.get(
+            "strategy", "pump_thresholds", "moderate", default=0.50
+        )
+        self.pump_threshold_extreme = config.get(
+            "strategy", "pump_thresholds", "extreme", default=1.00
+        )
+        self.pump_threshold_ultra = config.get(
+            "strategy", "pump_thresholds", "ultra", default=2.00
+        )
+
+        # Load other thresholds
         self.volume_multiplier = config.get("strategy", "volume_multiplier", default=3.0)
         self.rsi_short_threshold = config.get("strategy", "short_rsi", default=80)
         self.min_volume_24h = config.get("monitor", "min_volume_24h", default=50000000)
+        self.min_confidence = config.get("strategy", "min_confidence", default=0.6)
+
+        # Exhaustion detection parameters
+        self.vol_div_lookback = config.get(
+            "strategy", "exhaustion", "volume_divergence_lookback", default=10
+        )
+        self.rsi_div_threshold = config.get(
+            "strategy", "exhaustion", "rsi_divergence_threshold", default=5
+        )
+        self.mom_slowdown_window = config.get(
+            "strategy", "exhaustion", "momentum_slowdown_window", default=3
+        )
 
         # Initialize indicators
         self.rsi_calculator = RSI()
@@ -65,20 +109,25 @@ class StrategyEngine:
         self.pattern_recognizer = CandlePattern()
         self.volume_analyzer = VolumeAnalyzer()
         self.funding_analyzer = FundingRateAnalyzer()
+        self.momentum_analyzer = MomentumAnalyzer()
 
-        # Cache for price change calculations
+        # Cache for price change calculations (short-term, 30s TTL)
         self._price_change_cache: Dict[str, Dict[str, float]] = {}
         self._last_cache_update: Dict[str, datetime] = {}
         self._cache_ttl = timedelta(seconds=30)
 
+        # Cache for daily high data (long-term, 6h TTL)
+        self._daily_cache: Dict[str, Dict] = {}
+        self._daily_cache_ttl = timedelta(hours=6)
+
     def detect_pumps(self, tickers: Dict[str, TickerData]) -> List[PumpSignal]:
-        """Detect coins with abnormal price pumps.
+        """Detect coins with abnormal price pumps relative to previous day's high.
 
         Args:
             tickers: Dictionary of symbol -> TickerData
 
         Returns:
-            List of PumpSignal objects
+            List of PumpSignal objects sorted by gain percentage
         """
         pumps = []
 
@@ -87,47 +136,82 @@ class StrategyEngine:
             if ticker.quote_volume < self.min_volume_24h:
                 continue
 
-            # Get price changes
-            changes = self._get_price_changes(symbol)
-
-            if changes is None:
+            # Get previous day's high price
+            daily_data = self._get_prev_day_high(symbol)
+            if daily_data is None:
                 continue
 
-            price_change_5m = changes.get("5m", 0)
-            price_change_1h = changes.get("1h", 0)
+            prev_day_high = daily_data["prev_high"]
+            current_price = ticker.price
 
-            pump_type = None
+            # Calculate gain from previous day's high
+            if prev_day_high <= 0:
+                continue
+            gain_pct = ((current_price - prev_day_high) / prev_day_high) * 100
 
-            # Check for flash pump
-            if price_change_5m >= self.flash_pump_threshold * 100:
-                pump_type = "flash"
+            # Classify by gain level
+            if gain_pct >= self.pump_threshold_ultra * 100:
+                pump_type = "ultra"  # 200%+
+            elif gain_pct >= self.pump_threshold_extreme * 100:
+                pump_type = "extreme"  # 100-200%
+            elif gain_pct >= self.pump_threshold_moderate * 100:
+                pump_type = "moderate"  # 50-100%
+            else:
+                continue  # Below threshold, skip
 
-            # Check for trend pump
-            elif price_change_1h >= self.trend_pump_threshold * 100:
-                pump_type = "trend"
+            # Get short-term price changes for momentum analysis
+            changes = self._get_price_changes(symbol)
 
-            if pump_type:
-                # Calculate relative volume
-                rel_volume = self._calculate_relative_volume(symbol)
+            # Calculate relative volume
+            rel_volume = self._calculate_relative_volume(symbol)
 
-                pump = PumpSignal(
-                    symbol=symbol,
-                    pump_type=pump_type,
-                    price_change_5m=price_change_5m,
-                    price_change_1h=price_change_1h,
-                    relative_volume=rel_volume,
-                    timestamp=datetime.now(),
-                )
+            pump = PumpSignal(
+                symbol=symbol,
+                pump_type=pump_type,
+                gain_from_prev_high=gain_pct,
+                price_change_5m=changes.get("5m", 0) if changes else 0,
+                price_change_15m=changes.get("15m", 0) if changes else 0,
+                price_change_1h=changes.get("1h", 0) if changes else 0,
+                relative_volume=rel_volume,
+                prev_day_high=prev_day_high,
+                current_price=current_price,
+                timestamp=datetime.now(),
+            )
 
-                pumps.append(pump)
+            pumps.append(pump)
 
-        # Sort by total pump (5m + 1h combined weight)
-        pumps.sort(
-            key=lambda x: (x.price_change_5m * 2 + x.price_change_1h),
-            reverse=True,
-        )
+        # Sort by gain from previous day's high (highest first)
+        pumps.sort(key=lambda x: x.gain_from_prev_high, reverse=True)
 
         return pumps
+
+    def _get_prev_day_high(self, symbol: str) -> Optional[Dict[str, float]]:
+        """Get previous day's high price with caching (6h TTL).
+
+        Args:
+            symbol: Trading pair symbol
+
+        Returns:
+            Dictionary with 'prev_high' or None
+        """
+        cache_key = f"daily_{symbol}"
+        now = datetime.now()
+
+        # Check cache
+        if cache_key in self._daily_cache:
+            cached = self._daily_cache[cache_key]
+            if (now - cached["time"]) < self._daily_cache_ttl:
+                return cached["data"]
+
+        # Fetch daily klines (need 2 to get previous day)
+        klines = self.data_fetcher.fetch_klines(symbol, "1d", 2)
+        if not klines or len(klines) < 2:
+            return None
+
+        # First kline is the previous completed day
+        data = {"prev_high": klines[0].high}
+        self._daily_cache[cache_key] = {"time": now, "data": data}
+        return data
 
     def evaluate_short_opportunity(self, pump: PumpSignal) -> Optional[ShortSignal]:
         """Evaluate if a pumped coin is a good short opportunity.
@@ -147,6 +231,7 @@ class StrategyEngine:
         # Get k-lines for analysis
         klines_1m = self.data_fetcher.fetch_klines(symbol, "1m", 60)
         klines_5m = self.data_fetcher.fetch_klines(symbol, "5m", 60)
+        klines_15m = self.data_fetcher.fetch_klines(symbol, "15m", 30)
 
         if not klines_1m or not klines_5m:
             return None
@@ -185,13 +270,20 @@ class StrategyEngine:
         if is_double_top:
             pattern = f"Double Top (neckline: {neckline:.4f})"
 
-        # Calculate confidence score
+        # Evaluate exhaustion signals
+        exhaustion = self.evaluate_exhaustion(
+            pump, klines_1m, klines_5m, klines_15m,
+            rsi_values_1m, rsi_values_5m
+        )
+
+        # Calculate confidence score with exhaustion
         confidence = self._calculate_confidence(
-            pump, rsi_1m, rsi_5m, funding_rate, pump.relative_volume, pattern is not None
+            pump, rsi_1m, rsi_5m, funding_rate,
+            pump.relative_volume, pattern is not None, exhaustion
         )
 
         # Only return if confidence is above threshold
-        if confidence >= 0.5:
+        if confidence >= self.min_confidence:
             return ShortSignal(
                 symbol=symbol,
                 entry_price=ticker.price,
@@ -201,10 +293,95 @@ class StrategyEngine:
                 volume_multiplier=pump.relative_volume,
                 pattern=pattern,
                 confidence=confidence,
+                pump_type=pump.pump_type,
+                gain_from_prev_high=pump.gain_from_prev_high,
+                exhaustion=exhaustion,
                 timestamp=datetime.now(),
             )
 
         return None
+
+    def evaluate_exhaustion(
+        self,
+        pump: PumpSignal,
+        klines_1m: List,
+        klines_5m: List,
+        klines_15m: Optional[List],
+        rsi_values_1m: List[float],
+        rsi_values_5m: List[float],
+    ) -> Optional[ExhaustionSignal]:
+        """Evaluate momentum exhaustion signals.
+
+        Args:
+            pump: PumpSignal being evaluated
+            klines_1m: 1-minute klines
+            klines_5m: 5-minute klines
+            klines_15m: 15-minute klines (optional)
+            rsi_values_1m: Pre-calculated 1m RSI values
+            rsi_values_5m: Pre-calculated 5m RSI values
+
+        Returns:
+            ExhaustionSignal or None
+        """
+        symbol = pump.symbol
+
+        # Extract prices and volumes
+        prices_1m = [k.close for k in klines_1m]
+        volumes_1m = [k.volume for k in klines_1m]
+        prices_5m = [k.close for k in klines_5m]
+        volumes_5m = [k.volume for k in klines_5m]
+
+        # 1. Volume divergence detection (using 5m data)
+        vol_div, vol_div_strength = self.momentum_analyzer.detect_volume_divergence(
+            prices_5m, volumes_5m, lookback=self.vol_div_lookback
+        )
+
+        # 2. RSI divergence detection across multiple timeframes
+        rsi_div_1m, _ = self.momentum_analyzer.detect_rsi_divergence(
+            prices_1m, rsi_values_1m, lookback=20, threshold=self.rsi_div_threshold
+        )
+        rsi_div_5m, _ = self.momentum_analyzer.detect_rsi_divergence(
+            prices_5m, rsi_values_5m, lookback=20, threshold=self.rsi_div_threshold
+        )
+
+        rsi_div_15m = False
+        if klines_15m and len(klines_15m) >= 20:
+            prices_15m = [k.close for k in klines_15m]
+            rsi_values_15m = self.rsi_calculator.calculate(prices_15m, period=14)
+            rsi_div_15m, _ = self.momentum_analyzer.detect_rsi_divergence(
+                prices_15m, rsi_values_15m, lookback=20, threshold=self.rsi_div_threshold
+            )
+
+        # 3. Momentum slowdown detection (using 5m consecutive price changes)
+        price_changes_5m = []
+        for i in range(1, min(6, len(klines_5m))):
+            if klines_5m[-i - 1].close > 0:
+                change = (klines_5m[-i].close - klines_5m[-i - 1].close) / klines_5m[-i - 1].close * 100
+                price_changes_5m.insert(0, change)
+
+        mom_slowdown, mom_degree = self.momentum_analyzer.detect_momentum_slowdown(
+            price_changes_5m, window=self.mom_slowdown_window
+        )
+
+        # 4. Calculate exhaustion score
+        exhaustion_score = self.momentum_analyzer.calculate_momentum_score(
+            vol_div, vol_div_strength,
+            rsi_div_1m, rsi_div_5m, rsi_div_15m,
+            mom_slowdown, mom_degree
+        )
+
+        return ExhaustionSignal(
+            symbol=symbol,
+            volume_divergence=vol_div,
+            volume_divergence_strength=vol_div_strength,
+            rsi_divergence_1m=rsi_div_1m,
+            rsi_divergence_5m=rsi_div_5m,
+            rsi_divergence_15m=rsi_div_15m,
+            momentum_slowdown=mom_slowdown,
+            momentum_slowdown_degree=mom_degree,
+            exhaustion_score=exhaustion_score,
+            timestamp=datetime.now(),
+        )
 
     def _calculate_confidence(
         self,
@@ -214,6 +391,7 @@ class StrategyEngine:
         funding_rate: float,
         relative_volume: float,
         has_pattern: bool,
+        exhaustion: Optional[ExhaustionSignal] = None,
     ) -> float:
         """Calculate confidence score for short opportunity.
 
@@ -224,44 +402,51 @@ class StrategyEngine:
             funding_rate: Funding rate
             relative_volume: Relative volume multiplier
             has_pattern: Whether a bearish pattern was detected
+            exhaustion: Optional exhaustion signal
 
         Returns:
             Confidence score (0.0 to 1.0)
         """
         score = 0.0
 
-        # RSI score (up to 0.3)
+        # RSI score (up to 0.25)
         if rsi_1m > 90:
-            score += 0.3
+            score += 0.15
         elif rsi_1m > self.rsi_short_threshold:
-            score += 0.25
+            score += 0.1
 
         if rsi_5m > 85:
-            score += 0.2
-        elif rsi_5m > self.rsi_short_threshold:
-            score += 0.15
-
-        # Funding rate score (up to 0.2)
-        if funding_rate > 0.05:  # > 5%
-            score += 0.2
-        elif funding_rate > 0.01:  # > 1%
-            score += 0.15
-
-        # Volume score (up to 0.2)
-        if relative_volume > 5:
-            score += 0.2
-        elif relative_volume > self.volume_multiplier:
-            score += 0.15
-
-        # Pattern score (up to 0.15)
-        if has_pattern:
-            score += 0.15
-
-        # Pump type bonus (up to 0.15)
-        if pump.pump_type == "flash":
             score += 0.1
-        elif pump.pump_type == "trend":
+        elif rsi_5m > self.rsi_short_threshold:
             score += 0.05
+
+        # Funding rate score (up to 0.1)
+        if funding_rate > 0.05:  # > 5%
+            score += 0.1
+        elif funding_rate > 0.01:  # > 1%
+            score += 0.05
+
+        # Volume score (up to 0.1)
+        if relative_volume > 5:
+            score += 0.1
+        elif relative_volume > self.volume_multiplier:
+            score += 0.05
+
+        # Pattern score (up to 0.1)
+        if has_pattern:
+            score += 0.1
+
+        # Pump type bonus based on gain level (up to 0.15)
+        if pump.pump_type == "ultra":  # 200%+
+            score += 0.15
+        elif pump.pump_type == "extreme":  # 100-200%
+            score += 0.1
+        elif pump.pump_type == "moderate":  # 50-100%
+            score += 0.05
+
+        # Exhaustion signal bonus (up to 0.3)
+        if exhaustion:
+            score += exhaustion.exhaustion_score * 0.3
 
         return min(score, 1.0)
 

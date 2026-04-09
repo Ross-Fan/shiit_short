@@ -94,14 +94,14 @@ class ShortMonitor:
     def _print_header(self) -> None:
         """Print monitoring header."""
         print("\n" + "=" * 80)
-        print("Altcoin Short Monitoring System")
+        print("Altcoin Short Monitoring System (Extreme Pump Detection)")
         print("=" * 80)
         print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Testnet: {self.config.get('api', 'binance', 'testnet', default=True)}")
-        print(f"Flash Pump Threshold: {self.config.get('strategy', 'flash_pump_threshold', default=0.05) * 100}%")
-        print(f"Trend Pump Threshold: {self.config.get('strategy', 'trend_pump_threshold', default=0.15) * 100}%")
+        print(f"Pump Thresholds: moderate=50%, extreme=100%, ultra=200%")
         print(f"RSI Threshold: {self.config.get('strategy', 'short_rsi', default=80)}")
         print(f"Max Positions: {self.config.get('strategy', 'max_positions', default=3)}")
+        print(f"Min Confidence: {self.config.get('strategy', 'min_confidence', default=0.6)}")
         print("=" * 80 + "\n")
 
     def _print_pump_rankings(self, pumps: list[PumpSignal]) -> None:
@@ -111,17 +111,19 @@ class ShortMonitor:
             pumps: List of pump signals
         """
         if not pumps:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] No pumps detected")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] No pumps detected (>50% from prev day high)")
             return
 
-        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] === PUMP RANKINGS ===")
+        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] === PUMP RANKINGS (vs Prev Day High) ===")
 
         for i, pump in enumerate(pumps[:10], 1):
+            type_emoji = {"ultra": "🔥", "extreme": "⚡", "moderate": "📈"}.get(pump.pump_type, "")
             print(f"  {i}. {pump.symbol:<12} | "
-                  f"Type: {pump.pump_type:<6} | "
-                  f"5m: {pump.price_change_5m:>6.2f}% | "
-                  f"1h: {pump.price_change_1h:>6.2f}% | "
-                  f"Vol: {pump.relative_volume:>5.2f}x")
+                  f"{type_emoji} {pump.pump_type:<8} | "
+                  f"Gain: {pump.gain_from_prev_high:>6.1f}% | "
+                  f"5m: {pump.price_change_5m:>5.1f}% | "
+                  f"15m: {pump.price_change_15m:>5.1f}% | "
+                  f"Vol: {pump.relative_volume:>4.1f}x")
 
     def _print_short_signals(self, signals: list[ShortSignal]) -> None:
         """Print short opportunity signals.
@@ -135,12 +137,33 @@ class ShortMonitor:
         print(f"\n[{datetime.now().strftime('%H:%M:%S')}] === SHORT OPPORTUNITIES ===")
 
         for signal in signals:
+            type_emoji = {"ultra": "🔥", "extreme": "⚡", "moderate": "📈"}.get(signal.pump_type, "")
             print(f"  {signal.symbol:<12} | "
+                  f"{type_emoji} Gain: {signal.gain_from_prev_high:>5.0f}% | "
                   f"Entry: ${signal.entry_price:.4f} | "
-                  f"RSI(1m): {signal.rsi_1m:>5.1f} | "
-                  f"RSI(5m): {signal.rsi_5m:>5.1f} | "
-                  f"Funding: {signal.funding_rate:>6.2%} | "
-                  f"Confidence: {signal.confidence:>4.0%}")
+                  f"RSI: {signal.rsi_1m:>4.0f}/{signal.rsi_5m:>4.0f} | "
+                  f"Conf: {signal.confidence:>4.0%}")
+
+            # Print exhaustion signals if detected
+            if signal.exhaustion and signal.exhaustion.exhaustion_score > 0:
+                exh = signal.exhaustion
+                exh_flags = []
+                if exh.volume_divergence:
+                    exh_flags.append(f"VolDiv({exh.volume_divergence_strength:.0%})")
+                if exh.rsi_divergence_1m or exh.rsi_divergence_5m or exh.rsi_divergence_15m:
+                    tf = []
+                    if exh.rsi_divergence_1m:
+                        tf.append("1m")
+                    if exh.rsi_divergence_5m:
+                        tf.append("5m")
+                    if exh.rsi_divergence_15m:
+                        tf.append("15m")
+                    exh_flags.append(f"RSIDiv({','.join(tf)})")
+                if exh.momentum_slowdown:
+                    exh_flags.append(f"MomSlow({exh.momentum_slowdown_degree:.0%})")
+
+                if exh_flags:
+                    print(f"       Exhaustion: {' | '.join(exh_flags)} [Score: {exh.exhaustion_score:.0%}]")
 
             if signal.pattern:
                 print(f"       Pattern: {signal.pattern}")

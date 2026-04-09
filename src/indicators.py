@@ -259,3 +259,177 @@ class FundingRateAnalyzer:
             Funding cost or gain (positive = receive, negative = pay)
         """
         return position_value * funding_rate * hours
+
+
+class MomentumAnalyzer:
+    """Momentum exhaustion analyzer for detecting weakening trends."""
+
+    @staticmethod
+    def detect_volume_divergence(
+        prices: List[float],
+        volumes: List[float],
+        lookback: int = 10,
+    ) -> Tuple[bool, float]:
+        """Detect price-volume divergence (price makes new high but volume decreases).
+
+        Args:
+            prices: List of closing prices
+            volumes: List of volume values
+            lookback: Number of periods to look back
+
+        Returns:
+            Tuple of (is_divergence, divergence_strength 0-1)
+        """
+        if len(prices) < lookback or len(volumes) < lookback:
+            return False, 0.0
+
+        recent_prices = prices[-lookback:]
+        recent_volumes = volumes[-lookback:]
+
+        # Find local price highs
+        price_highs = []
+        for i in range(1, len(recent_prices) - 1):
+            if recent_prices[i] > recent_prices[i - 1] and recent_prices[i] > recent_prices[i + 1]:
+                price_highs.append((i, recent_prices[i], recent_volumes[i]))
+
+        if len(price_highs) < 2:
+            return False, 0.0
+
+        # Compare the last two highs
+        last_high = price_highs[-1]
+        prev_high = price_highs[-2]
+
+        # Price higher but volume lower = bearish divergence
+        if last_high[1] > prev_high[1] and last_high[2] < prev_high[2]:
+            divergence_strength = (prev_high[2] - last_high[2]) / prev_high[2]
+            return True, min(divergence_strength, 1.0)
+
+        return False, 0.0
+
+    @staticmethod
+    def detect_rsi_divergence(
+        prices: List[float],
+        rsi_values: List[float],
+        lookback: int = 20,
+        threshold: float = 5.0,
+    ) -> Tuple[bool, str]:
+        """Detect RSI bearish divergence (price makes new high but RSI doesn't).
+
+        Args:
+            prices: List of closing prices
+            rsi_values: List of RSI values
+            lookback: Number of periods to look back
+            threshold: RSI difference threshold to consider divergence
+
+        Returns:
+            Tuple of (is_divergence, description)
+        """
+        if len(prices) < lookback or len(rsi_values) < lookback:
+            return False, ""
+
+        recent_prices = prices[-lookback:]
+        recent_rsi = rsi_values[-lookback:]
+
+        # Filter out nan values from RSI
+        valid_rsi = [r for r in recent_rsi if not np.isnan(r)]
+        if len(valid_rsi) < 5:
+            return False, ""
+
+        # Find local maxima in prices
+        price_peaks = []
+        for i in range(1, len(recent_prices) - 1):
+            if recent_prices[i] > recent_prices[i - 1] and recent_prices[i] > recent_prices[i + 1]:
+                if not np.isnan(recent_rsi[i]):
+                    price_peaks.append((i, recent_prices[i], recent_rsi[i]))
+
+        if len(price_peaks) < 2:
+            return False, ""
+
+        # Compare last two price peaks
+        last_peak = price_peaks[-1]
+        prev_peak = price_peaks[-2]
+
+        # Price higher but RSI lower = bearish divergence
+        if last_peak[1] > prev_peak[1] and last_peak[2] < prev_peak[2] - threshold:
+            desc = f"RSI divergence: price {last_peak[1]:.4f} > {prev_peak[1]:.4f} but RSI {last_peak[2]:.1f} < {prev_peak[2]:.1f}"
+            return True, desc
+
+        return False, ""
+
+    @staticmethod
+    def detect_momentum_slowdown(
+        price_changes: List[float],
+        window: int = 3,
+    ) -> Tuple[bool, float]:
+        """Detect momentum slowdown (consecutive decreasing gains).
+
+        Args:
+            price_changes: List of consecutive period price changes (%)
+            window: Number of periods to check
+
+        Returns:
+            Tuple of (is_slowing, slowdown_degree 0-1)
+        """
+        if len(price_changes) < window + 1:
+            return False, 0.0
+
+        recent = price_changes[-(window + 1):]
+
+        # Count consecutive decreases
+        decreasing_count = 0
+        for i in range(1, len(recent)):
+            if recent[i] < recent[i - 1]:
+                decreasing_count += 1
+
+        # At least window-1 decreases indicate slowdown
+        if decreasing_count >= window - 1:
+            # Calculate slowdown degree
+            if recent[0] > 0:
+                slowdown = (recent[0] - recent[-1]) / recent[0]
+                return True, min(max(slowdown, 0), 1.0)
+
+        return False, 0.0
+
+    @staticmethod
+    def calculate_momentum_score(
+        volume_divergence: bool,
+        volume_divergence_strength: float,
+        rsi_divergence_1m: bool,
+        rsi_divergence_5m: bool,
+        rsi_divergence_15m: bool,
+        momentum_slowdown: bool,
+        momentum_slowdown_degree: float,
+    ) -> float:
+        """Calculate comprehensive exhaustion score.
+
+        Args:
+            volume_divergence: Whether volume divergence is detected
+            volume_divergence_strength: Strength of volume divergence (0-1)
+            rsi_divergence_1m: Whether 1m RSI divergence is detected
+            rsi_divergence_5m: Whether 5m RSI divergence is detected
+            rsi_divergence_15m: Whether 15m RSI divergence is detected
+            momentum_slowdown: Whether momentum slowdown is detected
+            momentum_slowdown_degree: Degree of slowdown (0-1)
+
+        Returns:
+            Exhaustion score (0-1)
+        """
+        score = 0.0
+
+        # Volume divergence contributes up to 0.3
+        if volume_divergence:
+            score += 0.3 * volume_divergence_strength
+
+        # RSI divergences contribute up to 0.5 combined
+        if rsi_divergence_1m:
+            score += 0.15
+        if rsi_divergence_5m:
+            score += 0.2
+        if rsi_divergence_15m:
+            score += 0.15
+
+        # Momentum slowdown contributes up to 0.2
+        if momentum_slowdown:
+            score += 0.2 * momentum_slowdown_degree
+
+        return min(score, 1.0)

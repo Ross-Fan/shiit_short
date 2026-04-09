@@ -6,10 +6,20 @@ monitor:
   min_volume_24h: 50000000  # Minimum 24h volume (USDT)
 
 strategy:
-  # Pump detection thresholds
-  flash_pump_threshold: 0.05  # 5% in 5 minutes
-  trend_pump_threshold: 0.15  # 15% in 1 hour
+  # Pump detection thresholds (relative to previous day's high)
+  pump_thresholds:
+    moderate: 0.50    # 50-100% gain
+    extreme: 1.00     # 100-200% gain
+    ultra: 2.00       # 200%+ gain
+
+  # Volume settings
   volume_multiplier: 3.0  # Current volume > avg * multiplier
+
+  # Exhaustion detection parameters
+  exhaustion:
+    volume_divergence_lookback: 10   # Lookback periods for volume divergence
+    rsi_divergence_threshold: 5      # RSI divergence threshold (points)
+    momentum_slowdown_window: 3      # Momentum slowdown detection window
 
   # Short confirmation thresholds
   short_rsi: 80  # RSI above this value
