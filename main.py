@@ -47,6 +47,8 @@ class ShortMonitor:
         self._check_count = 0
         self._pump_count = 0
         self._signal_count = 0
+        self._start_time = datetime.now()
+        self._last_status_log_time: datetime | None = None
 
         # Setup signal handlers
         signal.signal(signal.SIGINT, self._handle_signal)
@@ -183,6 +185,54 @@ class ShortMonitor:
             print(f"  Total Margin: ${exposure['total_margin']:,.2f}")
             print(f"  Avg Leverage: {exposure['avg_leverage']:.1f}x")
 
+    def _log_system_status(self, tickers: dict, event: str = "periodic") -> None:
+        """Log system status to monitor log.
+
+        Called on startup after connection and then hourly.
+
+        Args:
+            tickers: Current ticker data
+            event: Event type ("startup" or "periodic")
+        """
+        now = datetime.now()
+        uptime = now - self._start_time
+        hours, remainder = divmod(int(uptime.total_seconds()), 3600)
+        minutes, seconds = divmod(remainder, 60)
+
+        total_symbols = len(tickers)
+
+        # Count symbols that pass volume filter
+        min_vol = self.config.get("monitor", "min_volume_24h", default=50000000)
+        qualified_symbols = sum(
+            1 for t in tickers.values() if t.quote_volume >= min_vol
+        )
+
+        # Daily cache size (symbols with fetched daily data)
+        daily_cache_size = len(self.strategy_engine._daily_cache)
+
+        # Avg check rate
+        checks_per_min = (self._check_count / uptime.total_seconds() * 60) if uptime.total_seconds() > 0 else 0
+
+        status_msg = (
+            f"[{event.upper()}] "
+            f"Uptime: {hours}h{minutes}m{seconds}s | "
+            f"Symbols: {total_symbols} total, {qualified_symbols} qualified (vol>={min_vol / 1e6:.0f}M) | "
+            f"Daily cache: {daily_cache_size} | "
+            f"Checks: {self._check_count} ({checks_per_min:.1f}/min) | "
+            f"Pumps: {self._pump_count} | "
+            f"Signals: {self._signal_count}"
+        )
+
+        self.logger.info(status_msg)
+        self._last_status_log_time = now
+
+    def _should_log_status(self) -> bool:
+        """Check if it's time to log periodic system status (hourly)."""
+        if self._last_status_log_time is None:
+            return False
+        elapsed = (datetime.now() - self._last_status_log_time).total_seconds()
+        return elapsed >= 3600  # Every hour
+
     def run(self) -> None:
         """Run the monitoring loop."""
         self._print_header()
@@ -207,6 +257,10 @@ class ShortMonitor:
         else:
             self.logger.warning("Timeout waiting for market data, proceeding anyway")
 
+        # Log startup status
+        tickers = self.data_fetcher.get_all_tickers()
+        self._log_system_status(tickers, event="startup")
+
         try:
             while self._running and not self._shutdown_requested:
                 # Wait for data to populate
@@ -217,6 +271,10 @@ class ShortMonitor:
                 if not tickers:
                     self.logger.warning("No ticker data available")
                     continue
+
+                # Hourly system status log
+                if self._should_log_status():
+                    self._log_system_status(tickers, event="periodic")
 
                 # Detect pumps
                 pumps = self.strategy_engine.detect_pumps(tickers)
